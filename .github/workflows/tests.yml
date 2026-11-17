@@ -1,0 +1,9 @@
+name: Codec tests
+on: [push, pull_request]
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t vc-speech-codec .
+      - run: docker run --rm --entrypoint python3 -w /app vc-speech-codec -m unittest discover -s tests -v
