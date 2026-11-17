@@ -20,6 +20,37 @@ Output/aufnahme_amr_wb_12.65kbps_dtx_on.wav
 Output/aufnahme_g711_mulaw_64kbps.wav
 ```
 
+## Codec-Vergleich
+
+Die Werte „bei uns“ beschreiben die Standardkonfiguration dieses Projekts, nicht sämtliche Möglichkeiten der Standards. AMR-WB ist auch als **ITU-T G.722.2** standardisiert; es ist nicht mit G.722 gleichzusetzen.
+
+| Eigenschaft | Opus | AMR-WB / G.722.2 | G.711 μ-law |
+| --- | --- | --- | --- |
+| Typische Anwendung | Internet-Telefonie, WebRTC, Videokonferenzen und Sprachchats | HD-Mobilfunktelefonie, insbesondere VoLTE | Klassische Telefonie, SIP, Telefonanlagen und Gateways; μ-law besonders in Nordamerika und Japan |
+| Abtastrate beim Kodieren | **48 kHz** | **16 kHz** | **8 kHz** |
+| Audiobandbreite | Abhängig von Modus, Signal und Bitrate bis etwa 20 kHz | Etwa 50–7000 Hz | Typischer Telefonbereich etwa 300–3400 Hz¹ |
+| Gewählte Bitrate | **32 kbit/s** | **12,65 kbit/s** | **64 kbit/s**, fest |
+| Bitrate einstellbar | Im Skript: 6–128 kbit/s | 6,60; 8,85; 12,65; 14,25; 15,85; 18,25; 19,85; 23,05; 23,85 kbit/s | Nein |
+| Bitratensteuerung bei uns | Konstant: `vbr="off"` | Fester Sprachmodus; DTX reduziert die durchschnittliche Datenmenge in Pausen | Konstant |
+| Anwendungsmodus bei uns | `voip`: auf Sprache abgestimmt | Sprachcodec | Telefonieprofil |
+| Frame-Dauer bei uns | **20 ms** | **20 ms**, fest | Samplebasiert; keine feste Codec-Frame-Dauer |
+| Frame-Dauer einstellbar | Im Skript: 2,5; 5; 10; 20; 40; 60 ms | Nein | Nicht anwendbar |
+| VAD – Sprachaktivitätserkennung | Keine separate VAD-/DTX-Einstellung im Skript | Intern aktiv im Rahmen von DTX | Nicht implementiert |
+| DTX – reduzierte Übertragung in Sprechpausen | Nicht aktiviert | **Aktiviert: `dtx=True`**, abschaltbar | Nicht implementiert |
+| Komfortgeräusche | Keine gesonderte Komfortgeräuschfunktion aktiviert | Automatisch vom Decoder erzeugt, basierend auf den Hintergrundbeschreibungen des Encoders (SID-Frames) | Nicht implementiert |
+| Verwendeter Encoder | FFmpeg: `libopus` | Im Docker-Image: Bibliothek `libvo-amrwbenc` direkt über Python `ctypes`; alternativ FFmpeg: `libvo_amrwbenc` | FFmpeg: `pcm_mulaw` |
+
+¹ 300–3400 Hz beschreibt den üblichen Telefon-Sprachkanal, keine durch μ-law selbst erzwungene Filtergrenze. Das Skript resampelt auf 8 kHz, setzt aber keinen zusätzlichen Telefonbandfilter von 300 bis 3400 Hz. Die Kodier-Abtastraten in der Tabelle sind von der gemeinsamen WAV-Ausgabe mit 48 kHz zu unterscheiden.
+
+### Offizielle Quellen und Websites
+
+- [Opus – offizielle Projektwebsite](https://opus-codec.org/): Überblick zum Codec und zur Referenzimplementierung.
+- [IETF RFC 6716 – Definition of the Opus Audio Codec](https://www.rfc-editor.org/rfc/rfc6716.html): Opus-Spezifikation, Bandbreiten, Betriebsarten und Frame-Struktur. Die im Skript erlaubten Bitraten und Frame-Dauern sind ein Projektprofil und keine vollständige Aufzählung aller Opus-Möglichkeiten.
+- [ITU-T G.722.2 – AMR-WB](https://www.itu.int/rec/T-REC-G.722.2/en): Standard für die breitbandige Sprachkodierung mit etwa 7 kHz Audiobandbreite.
+- [IETF RFC 4867 – RTP Payload Format für AMR und AMR-WB](https://www.rfc-editor.org/rfc/rfc4867.html): AMR-WB-Modi, 20-ms-Sprachframes, SID-Frames und DTX-Kontext. Das Projekt erzeugt keine RTP-Pakete; die Quelle dient zur Einordnung der Codec-Eigenschaften.
+- [ITU-T G.711 – Pulse code modulation of voice frequencies](https://www.itu.int/rec/T-REC-G.711/en): Standard für A-law/μ-law und die 64-kbit/s-Kodierung; dieses Projekt verwendet μ-law.
+- [FFmpeg – offizielle Codec-Dokumentation](https://ffmpeg.org/ffmpeg-codecs.html): Encoder und Optionen, insbesondere `libopus` und `libvo-amrwbenc`. Die Verfügbarkeit einzelner Encoder hängt vom FFmpeg-Build ab.
+
 ## Windows und macOS: gemeinsamer Weg mit Docker
 
 1. Git und Docker Desktop installieren (offizielle Anbieter: https://git-scm.com und https://www.docker.com/products/docker-desktop/). Unter Windows das WSL-2-Backend aktivieren; Docker Desktop starten. Auf macOS die zur CPU passende Version installieren.
@@ -56,6 +87,26 @@ docker run --rm --mount "type=bind,source=ABSOLUTER_PROJEKTPFAD,target=/data" vc
 ```
 
 Nach Änderungen an `process.py` das Image erneut bauen. Ein Image enthält FFmpeg und `libvo-amrwbenc`; ein speziell kompiliertes FFmpeg ist damit nicht nötig. Beim Teilen eines Images dieselbe Image-ID bzw. denselben Registry-Digest verwenden: Debian- und Paketupdates können das Ergebnis eines späteren Neubaus ändern.
+
+## Woher kommt AMR-WB: Docker oder Conda?
+
+**Docker und Conda sind zwei alternative Ausführungswege.** Bei `docker run … vc-speech-codec …` laufen Python und sämtliche Audiowerkzeuge im Container. Bei `python process.py …` läuft das Skript lokal, beispielsweise in der aktivierten Conda-Umgebung.
+
+| Bestandteil | Docker: `Dockerfile` | Conda: `environment.yml` |
+| --- | --- | --- |
+| Python | Wird im Image installiert | Wird in der Conda-Umgebung installiert |
+| FFmpeg | Wird im Image installiert | Wird von conda-forge installiert |
+| AMR-WB-Encoderbibliothek | **Zusätzlich als Debian-Paket `libvo-amrwbenc0` installiert** | **Nicht ausdrücklich enthalten**; separat bereitstellen oder eigenes FFmpeg mit AMR-WB-Encoder verwenden |
+
+Die entscheidende Zeile im `Dockerfile` ist:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ffmpeg libvo-amrwbenc0 && rm -rf /var/lib/apt/lists/*
+```
+
+`process.py` prüft zuerst die Encoder des gewählten FFmpeg. Enthält es `libvo_amrwbenc`, erfolgt die AMR-WB-Kodierung über FFmpeg. Andernfalls lädt Python die separate Bibliothek `libvo-amrwbenc` über `ctypes` und ruft deren Encoder direkt auf, einschließlich DTX. FFmpeg übernimmt anschließend das Dekodieren. Im bereitgestellten Docker-Image ist dieser Bibliotheksweg eingerichtet und getestet; ein selbst gebautes FFmpeg ist dafür nicht erforderlich.
+
+Bei lokaler Ausführung wird die Bibliothek über die Systemsuche gefunden; alternativ lässt sich ihr Pfad mit `VC_AMRWB_LIBRARY` setzen. **Die Conda-Datei allein garantiert deshalb keinen AMR-WB-Encoder.** Details und Installationswege stehen im folgenden Abschnitt.
 
 ## Lokale Installation mit Anaconda / Miniconda
 
