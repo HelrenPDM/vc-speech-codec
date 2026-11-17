@@ -82,6 +82,14 @@ Mehrere Dateien als einzelne Argumente angeben (`Input/a.wav Input/b.wav`). Dock
 
 Nach Änderungen an `process.py` das Image erneut bauen. Ein Image enthält FFmpeg und `libvo-amrwbenc`; ein speziell kompiliertes FFmpeg ist damit nicht nötig. Beim Teilen eines Images dieselbe Image-ID bzw. denselben Registry-Digest verwenden: Debian- und Paketupdates können das Ergebnis eines späteren Neubaus ändern.
 
+Zum Neubauen im Projektordner `vc-speech-codec` (dort, wo das `Dockerfile` liegt) ausführen:
+
+```sh
+docker build -t vc-speech-codec .
+```
+
+Danach die Verarbeitung mit dem oben gezeigten `docker run`-Befehl erneut starten. Der neue Container verwendet das aktualisierte Image mit der geänderten `process.py`. Für Skriptänderungen ist kein `--no-cache` erforderlich; Docker übernimmt die geänderte Datei beim Neubau automatisch.
+
 ## Lokale Installation mit Anaconda / Miniconda
 
 In Anaconda Prompt (Windows) oder Terminal (macOS) im Projektordner:
