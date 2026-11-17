@@ -39,8 +39,11 @@ Die Werte „bei uns“ beschreiben die Standardkonfiguration dieses Projekts, n
 | DTX – reduzierte Übertragung in Sprechpausen | Nicht aktiviert | **Aktiviert: `dtx=True`**, abschaltbar | Nicht implementiert |
 | Komfortgeräusche | Keine gesonderte Komfortgeräuschfunktion aktiviert | Automatisch vom Decoder erzeugt, basierend auf den Hintergrundbeschreibungen des Encoders (SID-Frames) | Nicht implementiert |
 | Verwendeter Encoder | FFmpeg: `libopus` | Im Docker-Image: Bibliothek `libvo-amrwbenc` direkt über Python `ctypes`; alternativ FFmpeg: `libvo_amrwbenc` | FFmpeg: `pcm_mulaw` |
+| Verwendeter Decoder | FFmpeg, Standard-Decoder | Bibliothek `libopencore-amrwb` (opencore-amr) direkt über Python `ctypes` | FFmpeg, Standard-Decoder |
 
 ¹ 300–3400 Hz beschreibt den üblichen Telefon-Sprachkanal, keine durch μ-law selbst erzwungene Filtergrenze. Beim Resampling auf 8 kHz begrenzt der Anti-Aliasing-Filter den oberen Frequenzbereich auf unter 4 kHz; eine untere Grenze von 300 Hz ergibt sich daraus nicht. Für den Codec-Durchlauf ist kein zusätzlicher Telefonbandfilter nötig. Ein solcher Filter wäre eine zusätzliche Modellierung eines Telefonkanals und wird hier nicht angewendet. Die Kodier-Abtastraten in der Tabelle sind von der gemeinsamen WAV-Ausgabe mit 48 kHz zu unterscheiden.
+
+AMR-WB wird nicht mit FFmpeg dekodiert. FFmpegs nativer `amrwb`-Decoder verwirft SID-Frames und schreibt für NO_DATA-Frames digitale Nullen. Mit DTX würden Sprechpausen so zu digitaler Stille, und die Sprache nach jedem SID-Frame rückte 20 ms nach vorn. `libopencore-amrwb` liefert für jeden Frame 320 Samples und in Pausen das Komfortgeräusch.
 
 ### Offizielle Quellen und Websites
 
@@ -80,7 +83,7 @@ docker run --rm --mount "type=bind,source=$(pwd),target=/data" vc-speech-codec "
 
 Mehrere Dateien als einzelne Argumente angeben (`Input/a.wav Input/b.wav`). Docker expandiert `Input/*.wav` im Container nicht automatisch. Pfade mit Leerzeichen in Anführungszeichen setzen. Eingaben müssen innerhalb des eingebundenen Projektordners liegen. Ergebnisse erscheinen im lokalen `Output`. Es wird kein Server gestartet.
 
-Nach Änderungen an `process.py` das Image erneut bauen. Ein Image enthält FFmpeg und `libvo-amrwbenc`; ein speziell kompiliertes FFmpeg ist damit nicht nötig. Beim Teilen eines Images dieselbe Image-ID bzw. denselben Registry-Digest verwenden: Debian- und Paketupdates können das Ergebnis eines späteren Neubaus ändern.
+Nach Änderungen an `process.py` das Image erneut bauen. Ein Image enthält FFmpeg, `libvo-amrwbenc` und `libopencore-amrwb`; ein speziell kompiliertes FFmpeg ist damit nicht nötig. Beim Teilen eines Images dieselbe Image-ID bzw. denselben Registry-Digest verwenden: Debian- und Paketupdates können das Ergebnis eines späteren Neubaus ändern.
 
 Zum Neubauen im Projektordner `vc-speech-codec` (dort, wo das `Dockerfile` liegt) ausführen:
 
@@ -100,13 +103,13 @@ conda activate vc-speech-codec
 python process.py Input/aufnahme.wav
 ```
 
-`environment.yml` installiert Python 3.12 und FFmpeg von conda-forge. AMR-WB benötigt **zusätzlich** entweder ein FFmpeg mit `libvo_amrwbenc` oder eine ladbare `libvo-amrwbenc`-Bibliothek. Ein normales FFmpeg-Paket enthält diesen Encoder häufig nicht. Die Verfügbarkeit ist vom Betriebssystem und Build abhängig; die Conda-Umgebung allein garantiert deshalb keinen vollständigen AMR-WB-Workflow.
+`environment.yml` installiert Python 3.12 und FFmpeg von conda-forge. AMR-WB benötigt **zusätzlich** entweder ein FFmpeg mit `libvo_amrwbenc` oder eine ladbare `libvo-amrwbenc`-Bibliothek, und zum Dekodieren immer die Bibliothek `libopencore-amrwb`. Ein normales FFmpeg-Paket enthält diesen Encoder häufig nicht. Die Verfügbarkeit ist vom Betriebssystem und Build abhängig; die Conda-Umgebung allein garantiert deshalb keinen vollständigen AMR-WB-Workflow.
 
-- **Windows:** Für alle drei Codecs Docker verwenden. Ein bereits vorhandenes selbst gebautes FFmpeg mit `libvo_amrwbenc` kann über `--ffmpeg "C:\\Tools\\ffmpeg.exe"` eingebunden werden. Eine separat vorhandene, vertrauenswürdige Encoder-DLL kann alternativ per `VC_AMRWB_LIBRARY` angegeben werden; Architektur und Python müssen zusammenpassen.
-- **macOS:** Alternativ mit Homebrew `brew install ffmpeg vo-amrwbenc` installieren und `python process.py --ffmpeg "$(brew --prefix)/bin/ffmpeg" Input/aufnahme.wav` starten. Falls die Bibliothek nicht automatisch gefunden wird: `export VC_AMRWB_LIBRARY="$(brew --prefix vo-amrwbenc)/lib/libvo-amrwbenc.dylib"`. Ein vorhandenes eigenes FFmpeg kann ebenfalls mit `--ffmpeg` gewählt werden.
-- **Debian/Ubuntu:** `sudo apt-get install python3 ffmpeg libvo-amrwbenc0`, danach `python3 process.py Input/aufnahme.wav`.
+- **Windows:** Für alle drei Codecs Docker verwenden. Ein bereits vorhandenes selbst gebautes FFmpeg mit `libvo_amrwbenc` kann über `--ffmpeg "C:\\Tools\\ffmpeg.exe"` eingebunden werden. Eine separat vorhandene, vertrauenswürdige Encoder-DLL kann alternativ per `VC_AMRWB_LIBRARY` angegeben werden, die Decoder-DLL per `VC_AMRWB_DECODER_LIBRARY`; Architektur und Python müssen zusammenpassen.
+- **macOS:** Alternativ mit Homebrew `brew install ffmpeg vo-amrwbenc opencore-amr` installieren und `python process.py --ffmpeg "$(brew --prefix)/bin/ffmpeg" Input/aufnahme.wav` starten. Falls die Bibliotheken nicht automatisch gefunden werden: `export VC_AMRWB_LIBRARY="$(brew --prefix vo-amrwbenc)/lib/libvo-amrwbenc.dylib"` und `export VC_AMRWB_DECODER_LIBRARY="$(brew --prefix opencore-amr)/lib/libopencore-amrwb.dylib"`. Ein vorhandenes eigenes FFmpeg kann ebenfalls mit `--ffmpeg` gewählt werden.
+- **Debian/Ubuntu:** `sudo apt-get install python3 ffmpeg libvo-amrwbenc0 libopencore-amrwb0`, danach `python3 process.py Input/aufnahme.wav`.
 
-FFmpeg-Auswahl: `--ffmpeg` überschreibt die Umgebungsvariable `FFMPEG`, sonst wird `ffmpeg` im PATH gesucht. Vor der Verarbeitung prüft das Skript die aktivierten Encoder; fehlende Voraussetzungen führen zu einer Fehlermeldung. Ein AMR-WB-Decoder muss ebenfalls im verwendeten FFmpeg vorhanden sein.
+FFmpeg-Auswahl: `--ffmpeg` überschreibt die Umgebungsvariable `FFMPEG`, sonst wird `ffmpeg` im PATH gesucht. Vor der Verarbeitung prüft das Skript die aktivierten Encoder; fehlende Voraussetzungen führen zu einer Fehlermeldung. AMR-WB dekodiert das Skript über `libopencore-amrwb`, nicht über FFmpeg.
 
 Native Windows-/macOS-Installationen sind hier nicht ausgeführt worden. Der gemeinsame Linux-Docker-Weg wird separat funktional getestet.
 
@@ -129,6 +132,7 @@ Im Python-Wörterbuch `CODECS` ändern; boolesche Werte heißen dort `True` und 
 | `--output` | gemeinsamer Zielordner | beliebiger beschreibbarer Ordner; Standard `Output` |
 | `--ffmpeg` | FFmpeg-Programm | Programmname oder ausführbarer Pfad |
 | `VC_AMRWB_LIBRARY` | alternative Encoderbibliothek | Bibliothekspfad; nur bei Bibliotheksbetrieb |
+| `VC_AMRWB_DECODER_LIBRARY` | alternative Decoderbibliothek `libopencore-amrwb` | Bibliothekspfad |
 
 DTX entfernt keine Pausen. SID-Frames beschreiben Hintergrundgeräusche; der Decoder erzeugt Komfortgeräusche. VAD-Schwelle und Komfortgeräuschpegel sind hier nicht separat einstellbar. G.711 hat keine DTX-Simulation. Die angegebene Bitrate ist die Codec-Zielbitrate, nicht die Bitrate der abschließenden PCM-WAV-Datei; DTX reduziert die mittlere AMR-Datenrate.
 
@@ -152,4 +156,4 @@ Im Docker-Image:
 docker run --rm --entrypoint python3 -w /app vc-speech-codec -m unittest discover -s tests -v
 ```
 
-Die Tests erzeugen synthetische Audiosignale und prüfen alle drei Codec-Durchläufe, WAV-Format und Länge, Dateinamen, DTX-Wirkung auf Stille, ungültige Einstellungen, beschädigte Eingaben sowie den Überschreibschutz. Keine Testdaten werden in `Output` gespeichert.
+Die Tests erzeugen synthetische Audiosignale und prüfen alle drei Codec-Durchläufe, WAV-Format und Länge, Dateinamen, DTX-Wirkung auf Stille, die vollständige Dekodierung von SID- und NO_DATA-Frames, ungültige Einstellungen, beschädigte Eingaben sowie den Überschreibschutz. Keine Testdaten werden in `Output` gespeichert.

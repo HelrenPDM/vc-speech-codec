@@ -319,6 +319,99 @@ def amr_library():
         raise RuntimeError(f"AMR-WB-Bibliothek nicht verwendbar: {exc}") from exc
 
 
+def amr_decoder_library():
+    """Den AMR-WB-Decoder libopencore-amrwb (opencore-amr) laden.
+
+    Gegenstück zu amr_library() für den Encoder. Auswahl wie dort: zuerst die
+    Umgebungsvariable VC_AMRWB_DECODER_LIBRARY, sonst die Systemsuche. Die
+    Signaturen folgen dec_if.h von opencore-amr:
+    D_IF_init(), D_IF_decode(state, bits, synth, bfi), D_IF_exit(state).
+    """
+    name = os.environ.get("VC_AMRWB_DECODER_LIBRARY") or ctypes.util.find_library("opencore-amrwb")
+    if not name:
+        raise RuntimeError("AMR-WB: libopencore-amrwb fehlt. Docker verwenden oder VC_AMRWB_DECODER_LIBRARY auf die Bibliothek setzen.")
+    try:
+        lib = ctypes.CDLL(name)
+        lib.D_IF_init.argtypes = []
+        lib.D_IF_init.restype = ctypes.c_void_p
+        lib.D_IF_decode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte),
+                                    ctypes.POINTER(ctypes.c_short), ctypes.c_int]
+        lib.D_IF_decode.restype = None
+        lib.D_IF_exit.argtypes = [ctypes.c_void_p]
+        lib.D_IF_exit.restype = None
+        return lib
+    except (OSError, AttributeError) as exc:
+        raise RuntimeError(f"AMR-WB-Decoderbibliothek nicht verwendbar: {exc}") from exc
+
+
+# Nutzdatenbytes nach dem Frame-Kopfbyte je Frame-Typ (RFC 4867, Speicherformat).
+# 0-8: Sprache, 9: SID (Hintergrundbeschreibung), 14: Frame verloren, 15: keine Daten.
+AMR_WB_PAYLOAD = {0: 17, 1: 23, 2: 32, 3: 36, 4: 40, 5: 46, 6: 50, 7: 58, 8: 60, 9: 5, 14: 0, 15: 0}
+
+
+def decode_amr(executable, encoded, temp):
+    """AMR-WB vollständig dekodieren, auch SID- und NO_DATA-Frames.
+
+    Der native amrwb-Decoder von FFmpeg verwirft SID-Frames und schreibt für
+    NO_DATA-Frames digitale Nullen. Mit DTX würden Sprechpausen so zu digitaler
+    Stille, und die Sprache nach jedem SID-Frame rückte 20 ms nach vorn.
+    opencore-amr liefert für jeden Frame 320 Samples, in Pausen Komfortgeräusch.
+    """
+    data = encoded.read_bytes()
+    # encode_amr() schreibt das AMR-WB-Speicherformat (RFC 4867, Abschnitt 5):
+    # Dateikopf, danach je Frame ein Kopfbyte mit dem Frame-Typ und die Nutzdaten.
+    header = b"#!AMR-WB\n"
+    if not data.startswith(header):
+        raise RuntimeError("AMR-WB: Dateikopf fehlt.")
+    lib = amr_decoder_library()
+    state = lib.D_IF_init()
+    if not state:
+        raise RuntimeError("AMR-WB: Decoder-Initialisierung fehlgeschlagen")
+    pcm = bytearray()
+    frames = 0
+    pos = len(header)
+    try:
+        # 320 Samples = 20 ms bei 16 kHz, die feste Ausgabe je Frame.
+        synth = (ctypes.c_short * 320)()
+        while pos < len(data):
+            frame_type = (data[pos] >> 3) & 0x0F
+            if frame_type not in AMR_WB_PAYLOAD:
+                raise RuntimeError(f"AMR-WB: ungültiger Frame-Typ {frame_type}")
+            # Frame-Länge aus dem Frame-Typ: Kopfbyte plus Nutzdaten.
+            end = pos + 1 + AMR_WB_PAYLOAD[frame_type]
+            if end > len(data):
+                raise RuntimeError("AMR-WB: unvollständiger Frame")
+            # Eigener, mit Nullen aufgefüllter Puffer je Frame (wie in encode_amr()
+            # 64 Bytes, größter Frame 61 Bytes): Der Decoder liest nie über das
+            # Ende der Datei hinaus. bfi = 0: Die Datei enthält keine fehlerhaften Frames.
+            bits = (ctypes.c_ubyte * 64).from_buffer_copy(data[pos:end].ljust(64, b"\0"))
+            lib.D_IF_decode(state, bits, synth, 0)
+            chunk = bytes(synth)
+            # Weiter als s16le wie in encode_amr(); auf Big-Endian-Systemen Bytes tauschen.
+            if sys.byteorder != "little":
+                chunk = b"".join(chunk[i:i+2][::-1] for i in range(0, len(chunk), 2))
+            pcm += chunk
+            frames += 1
+            pos = end
+    finally:
+        lib.D_IF_exit(state)
+    # Kontrolle: jeder Frame, auch SID und NO_DATA, ergibt 320 Samples (640 Bytes).
+    if len(pcm) != frames * 640:
+        raise RuntimeError("AMR-WB: Der Decoder lieferte nicht 320 Samples je Frame.")
+    # In das gemeinsame Ausgabeformat wandeln, wie decode_to_pcm() es für die
+    # anderen Codecs tut: dieselbe FFmpeg-Abtastratenwandlung auf 48 kHz, 24 Bit.
+    raw = temp / "decoded_amr_wb.s16"
+    raw.write_bytes(bytes(pcm))
+    return ffmpeg(executable, [
+        "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", str(raw),
+        "-ac", str(OUTPUT_CHANNELS),
+        "-ar", str(OUTPUT_RATE),
+        "-c:a", "pcm_s24le",
+        "-f", "s24le",
+        "pipe:1",
+    ])
+
+
 def encode_amr(executable, reference, encoded, config):
     lib = amr_library()
     raw = ffmpeg(executable, ["-i", str(reference), "-ac", "1", "-ar", "16000",
@@ -372,6 +465,11 @@ def check_encoders(executable, profiles):
         amr_library()
         missing.remove("libvo_amrwbenc")
 
+    # Dekodiert wird AMR-WB immer über opencore-amr, siehe decode_amr().
+    # Vorab prüfen, damit ein fehlender Decoder vor der ersten Datei auffällt.
+    if "amr_wb" in profiles:
+        amr_decoder_library()
+
     if missing:
         raise RuntimeError(
             "FFmpeg-Encoder fehlen: "
@@ -418,7 +516,11 @@ def process_audio(executable, source, output_dir, profiles):
                 encode_with_ffmpeg(executable, reference, encoded, profile)
 
             # Bei DTX rekonstruiert der Decoder auch Komfortgeräusche.
-            decoded_pcm = decode_to_pcm(executable, encoded)
+            # AMR-WB über opencore-amr: FFmpegs nativer Decoder verwirft SID-Frames.
+            if codec == "amr_wb":
+                decoded_pcm = decode_amr(executable, encoded, temp)
+            else:
+                decoded_pcm = decode_to_pcm(executable, encoded)
 
             if not decoded_pcm:
                 raise RuntimeError(f"Keine dekodierten Samples für {codec}.")
