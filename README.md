@@ -40,7 +40,7 @@ Die Werte „bei uns“ beschreiben die Standardkonfiguration dieses Projekts, n
 | Komfortgeräusche | Keine gesonderte Komfortgeräuschfunktion aktiviert | Automatisch vom Decoder erzeugt, basierend auf den Hintergrundbeschreibungen des Encoders (SID-Frames) | Nicht implementiert |
 | Verwendeter Encoder | FFmpeg: `libopus` | Im Docker-Image: Bibliothek `libvo-amrwbenc` direkt über Python `ctypes`; alternativ FFmpeg: `libvo_amrwbenc` | FFmpeg: `pcm_mulaw` |
 
-¹ 300–3400 Hz beschreibt den üblichen Telefon-Sprachkanal, keine durch μ-law selbst erzwungene Filtergrenze. Das Skript resampelt auf 8 kHz, setzt aber keinen zusätzlichen Telefonbandfilter von 300 bis 3400 Hz. Die Kodier-Abtastraten in der Tabelle sind von der gemeinsamen WAV-Ausgabe mit 48 kHz zu unterscheiden.
+¹ 300–3400 Hz beschreibt den üblichen Telefon-Sprachkanal, keine durch μ-law selbst erzwungene Filtergrenze. Beim Resampling auf 8 kHz begrenzt der Anti-Aliasing-Filter den oberen Frequenzbereich auf unter 4 kHz; eine untere Grenze von 300 Hz ergibt sich daraus nicht. Für den Codec-Durchlauf ist kein zusätzlicher Telefonbandfilter nötig. Ein solcher Filter wäre eine zusätzliche Modellierung eines Telefonkanals und wird hier nicht angewendet. Die Kodier-Abtastraten in der Tabelle sind von der gemeinsamen WAV-Ausgabe mit 48 kHz zu unterscheiden.
 
 ### Offizielle Quellen und Websites
 
@@ -80,33 +80,7 @@ docker run --rm --mount "type=bind,source=$(pwd),target=/data" vc-speech-codec "
 
 Mehrere Dateien als einzelne Argumente angeben (`Input/a.wav Input/b.wav`). Docker expandiert `Input/*.wav` im Container nicht automatisch. Pfade mit Leerzeichen in Anführungszeichen setzen. Eingaben müssen innerhalb des eingebundenen Projektordners liegen. Ergebnisse erscheinen im lokalen `Output`. Es wird kein Server gestartet.
 
-DTX ausschalten:
-
-```sh
-docker run --rm --mount "type=bind,source=ABSOLUTER_PROJEKTPFAD,target=/data" vc-speech-codec Input/aufnahme.wav --amr-dtx off
-```
-
 Nach Änderungen an `process.py` das Image erneut bauen. Ein Image enthält FFmpeg und `libvo-amrwbenc`; ein speziell kompiliertes FFmpeg ist damit nicht nötig. Beim Teilen eines Images dieselbe Image-ID bzw. denselben Registry-Digest verwenden: Debian- und Paketupdates können das Ergebnis eines späteren Neubaus ändern.
-
-## Woher kommt AMR-WB: Docker oder Conda?
-
-**Docker und Conda sind zwei alternative Ausführungswege.** Bei `docker run … vc-speech-codec …` laufen Python und sämtliche Audiowerkzeuge im Container. Bei `python process.py …` läuft das Skript lokal, beispielsweise in der aktivierten Conda-Umgebung.
-
-| Bestandteil | Docker: `Dockerfile` | Conda: `environment.yml` |
-| --- | --- | --- |
-| Python | Wird im Image installiert | Wird in der Conda-Umgebung installiert |
-| FFmpeg | Wird im Image installiert | Wird von conda-forge installiert |
-| AMR-WB-Encoderbibliothek | **Zusätzlich als Debian-Paket `libvo-amrwbenc0` installiert** | **Nicht ausdrücklich enthalten**; separat bereitstellen oder eigenes FFmpeg mit AMR-WB-Encoder verwenden |
-
-Die entscheidende Zeile im `Dockerfile` ist:
-
-```dockerfile
-RUN apt-get update && apt-get install -y --no-install-recommends python3 ffmpeg libvo-amrwbenc0 && rm -rf /var/lib/apt/lists/*
-```
-
-`process.py` prüft zuerst die Encoder des gewählten FFmpeg. Enthält es `libvo_amrwbenc`, erfolgt die AMR-WB-Kodierung über FFmpeg. Andernfalls lädt Python die separate Bibliothek `libvo-amrwbenc` über `ctypes` und ruft deren Encoder direkt auf, einschließlich DTX. FFmpeg übernimmt anschließend das Dekodieren. Im bereitgestellten Docker-Image ist dieser Bibliotheksweg eingerichtet und getestet; ein selbst gebautes FFmpeg ist dafür nicht erforderlich.
-
-Bei lokaler Ausführung wird die Bibliothek über die Systemsuche gefunden; alternativ lässt sich ihr Pfad mit `VC_AMRWB_LIBRARY` setzen. **Die Conda-Datei allein garantiert deshalb keinen AMR-WB-Encoder.** Details und Installationswege stehen im folgenden Abschnitt.
 
 ## Lokale Installation mit Anaconda / Miniconda
 
@@ -130,7 +104,7 @@ Native Windows-/macOS-Installationen sind hier nicht ausgeführt worden. Der gem
 
 ## Einstellungen und erlaubte Werte
 
-Im Python-Wörterbuch `CODECS` ändern; boolesche Werte heißen dort `True` und `False`. CLI-Optionen mit `python process.py --help` anzeigen.
+Im Python-Wörterbuch `CODECS` ändern; boolesche Werte heißen dort `True` und `False`. **Auch DTX wird direkt dort eingestellt:** Unter `amr_wb` bedeutet `"dtx": True` eingeschaltet und `"dtx": False` ausgeschaltet. Ein zusätzlicher Befehl ist dafür nicht erforderlich. Die optionale CLI-Option `--amr-dtx on` bzw. `--amr-dtx off` überschreibt diesen Wert nur für den jeweiligen Aufruf. Ohne diese Option gilt die Skripteinstellung. Bei Docker nach einer Skriptänderung das Image neu bauen. Weitere CLI-Optionen mit `python process.py --help` anzeigen.
 
 | Einstellung | Bedeutung | Erlaubt / Standard |
 | --- | --- | --- |
