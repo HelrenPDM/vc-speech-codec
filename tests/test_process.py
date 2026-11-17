@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -51,6 +52,32 @@ class PipelineTests(unittest.TestCase):
             sizes.append(encoded.stat().st_size)
             self.assertTrue(p.decode_to_pcm("ffmpeg", encoded))
         self.assertLess(sizes[1], sizes[0])
+
+    def test_amr_dtx_decodes_every_frame(self):
+        # Regressionstest für decode_amr(): Mit FFmpegs nativem Decoder schlägt er fehl.
+        # Klänge mit leisem Rauschen dazwischen: Die Pause erzeugt SID- und NO_DATA-Frames.
+        # Das Rauschen hält die Eingabe frei von digitaler Stille.
+        expr = ("if(lt(t\\,0.8)+gte(t\\,2.0)\\,0.2*(0.5+0.5*sin(2*PI*4*t))*(sin(2*PI*140*t)"
+                "+sin(2*PI*280*t)/2+sin(2*PI*420*t)/3+sin(2*PI*560*t)/4)\\,0)+0.0005*(2*random(0)-1)")
+        source = self.root / "pausen.wav"
+        p.ffmpeg("ffmpeg", ["-f", "lavfi", "-i", f"aevalsrc=exprs={expr}:s=48000:d=2.8", str(source)])
+        encoded = self.root / "pausen.amr"
+        p.encode_amr("ffmpeg", source, encoded, dict(p.CODECS["amr_wb"], dtx=True))
+        # Frame-Typen zählen; der Dateikopf "#!AMR-WB\n" hat 9 Bytes.
+        data = encoded.read_bytes()
+        pos, types = 9, []
+        while pos < len(data):
+            frame_type = (data[pos] >> 3) & 0x0F
+            types.append(frame_type)
+            pos += 1 + p.AMR_WB_PAYLOAD[frame_type]
+        self.assertIn(9, types)   # SID: Der Test prüft also wirklich DTX.
+        self.assertIn(15, types)  # NO_DATA
+        pcm = p.decode_amr("ffmpeg", encoded, self.root)
+        # 320 Samples je Frame bei 16 kHz, also 960 bei 48 kHz, je 3 Bytes.
+        self.assertEqual(len(pcm), len(types) * 960 * 3)
+        # Keine digitale Stille von 20 ms (960 Samples) oder länger: Pausen tragen Komfortgeräusch.
+        longest = max((len(m.group()) // 3 for m in re.finditer(rb"(?:\x00\x00\x00)+", pcm)), default=0)
+        self.assertLess(longest, 960)
 
     def test_invalid_settings(self):
         for codec, key, value in [("opus", "bitrate_bps", 5999), ("opus", "application", "invalid"),
